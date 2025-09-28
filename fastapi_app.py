@@ -88,12 +88,12 @@ async def process_frames(frames: List[UploadFile] = File(...)):
         )
     
     # Validate file types
-    for frame in frames:
-        if not frame.filename.lower().endswith(('.jpg', '.jpeg')):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Only JPG files are supported. Invalid file: {frame.filename}"
-            )
+    # for frame in frames:
+    #     if not frame.filename.lower().endswith(('.jpg', '.jpeg')):
+    #         raise HTTPException(
+    #             status_code=400, 
+    #             detail=f"Only JPG files are supported. Invalid file: {frame.filename}"
+    #         )
     
     temp_frame_paths = []
     temp_audio_path = None
@@ -200,6 +200,7 @@ async def process_frames(frames: List[UploadFile] = File(...)):
             "similar_clips": similar_clips,
             "total_results": len(similar_clips)
         }
+        print(response)
         
         return JSONResponse(content=response)
         
