@@ -1,0 +1,17 @@
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+transformers>=4.35.0
+torch>=2.0.0
+diffusers>=0.24.0
+scipy>=1.11.0
+numpy>=1.24.0
+soundfile>=0.12.1
+psycopg2-binary>=2.9.7
+pgvector>=0.2.4
+panns-inference>=0.1.0
+librosa>=0.10.1
+tqdm>=4.66.0
+huggingface-hub>=0.17.0
+opencv-python>=4.8.0
+qwen-vl-utils
