@@ -5,6 +5,7 @@ import tempfile
 import traceback
 from typing import List, Dict, Any
 
+import numpy as np
 import torch
 import scipy.io.wavfile
 import soundfile as sf
@@ -213,19 +214,33 @@ async def process_frames(frames: List[UploadFile] = File(...)):
 
         # Encode generated audio
         generated_audio_payload = None
-        if audio:
-            generated_buffer = io.BytesIO()
-            scipy.io.wavfile.write(generated_buffer, rate=16000, data=audio[0])
-            generated_buffer.seek(0)
-            generated_audio_payload = {
-                "filename": "generated_soundscape.wav",
-                "sample_rate": 16000,
-                "content_base64": base64.b64encode(generated_buffer.read()).decode("utf-8"),
-            }
+        if audio and len(audio) > 0:
+            try:
+                print(f"Encoding generated audio: shape={audio[0].shape}")
+                generated_buffer = io.BytesIO()
+                scipy.io.wavfile.write(generated_buffer, rate=16000, data=audio[0])
+                generated_buffer.seek(0)
+                generated_bytes = generated_buffer.read()
+                
+                generated_audio_payload = {
+                    "filename": "generated_soundscape.wav",
+                    "sample_rate": 16000,
+                    "content_base64": base64.b64encode(generated_bytes).decode("utf-8"),
+                }
+                print(f"Successfully encoded generated audio ({len(generated_bytes)} bytes)")
+                
+            except Exception as gen_audio_error:
+                print(f"Error encoding generated audio: {gen_audio_error}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("No generated audio available")
 
         # Collect similar clip payloads with audio bytes
         similar_clip_payloads = []
-        for clip in similar_clips:
+        for i, clip in enumerate(similar_clips):
+            print(f"Processing similar clip {i+1}/{len(similar_clips)}: {clip.get('fname')}")
+            
             clip_payload = {
                 "fname": clip.get("fname"),
                 "similarity": clip.get("similarity"),
@@ -233,26 +248,85 @@ async def process_frames(frames: List[UploadFile] = File(...)):
                 "split": clip.get("split"),
             }
 
+            # Try to retrieve audio data
             audio_tuple = None
             if audio_searcher is not None and clip.get("fname"):
                 try:
+                    print(f"Attempting to retrieve audio data for {clip['fname']}")
+                    
+                    # First, check if the audio info exists
+                    audio_info = audio_searcher.get_audio_info(clip["fname"])
+                    if audio_info:
+                        print(f"Audio info for {clip['fname']}: {audio_info}")
+                    else:
+                        print(f"No audio info found for {clip['fname']}")
+                    
+                    # Try to get the actual audio data
                     audio_tuple = audio_searcher.get_audio_data(clip["fname"])
+                    if audio_tuple:
+                        print(f"Successfully retrieved audio data for {clip['fname']}")
+                    else:
+                        print(f"No audio data found for {clip['fname']} - may not be stored in database")
+                        
                 except Exception as retrieval_error:
-                    print(f"Unable to retrieve audio data for {clip.get('fname')}: {retrieval_error}")
+                    print(f"Error retrieving audio data for {clip.get('fname')}: {retrieval_error}")
+                    import traceback
+                    traceback.print_exc()
 
             if audio_tuple:
-                audio_array, sample_rate = audio_tuple
-                buffer = io.BytesIO()
-                sf.write(buffer, audio_array, sample_rate, format="WAV")
-                buffer.seek(0)
-                clip_payload.update(
-                    {
+                try:
+                    audio_array, sample_rate = audio_tuple
+                    print(f"Audio data: shape={audio_array.shape}, sample_rate={sample_rate}")
+                    
+                    buffer = io.BytesIO()
+                    sf.write(buffer, audio_array, sample_rate, format="WAV")
+                    buffer.seek(0)
+                    audio_bytes = buffer.read()
+                    
+                    clip_payload.update({
                         "sample_rate": sample_rate,
-                        "content_base64": base64.b64encode(buffer.read()).decode("utf-8"),
-                    }
-                )
+                        "content_base64": base64.b64encode(audio_bytes).decode("utf-8"),
+                    })
+                    print(f"Successfully encoded audio for {clip['fname']} ({len(audio_bytes)} bytes)")
+                    
+                except Exception as encoding_error:
+                    print(f"Error encoding audio for {clip['fname']}: {encoding_error}")
+                    import traceback
+                    traceback.print_exc()
+                    clip_payload.update({"sample_rate": None, "content_base64": None})
             else:
-                clip_payload.update({"sample_rate": None, "content_base64": None})
+                print(f"No audio data available for {clip['fname']} - creating placeholder")
+                
+                # Create a short placeholder audio (1 second of silence)
+                try:
+                    placeholder_duration = 1.0  # seconds
+                    placeholder_sample_rate = 16000
+                    placeholder_samples = int(placeholder_duration * placeholder_sample_rate)
+                    placeholder_audio = np.zeros(placeholder_samples, dtype=np.float32)
+                    
+                    # Add a small beep to indicate this is a placeholder
+                    beep_freq = 440  # A4 note
+                    beep_duration = 0.1  # 100ms beep
+                    beep_samples = int(beep_duration * placeholder_sample_rate)
+                    t = np.linspace(0, beep_duration, beep_samples)
+                    beep = 0.1 * np.sin(2 * np.pi * beep_freq * t)
+                    placeholder_audio[:beep_samples] = beep
+                    
+                    buffer = io.BytesIO()
+                    sf.write(buffer, placeholder_audio, placeholder_sample_rate, format="WAV")
+                    buffer.seek(0)
+                    placeholder_bytes = buffer.read()
+                    
+                    clip_payload.update({
+                        "sample_rate": placeholder_sample_rate,
+                        "content_base64": base64.b64encode(placeholder_bytes).decode("utf-8"),
+                        "is_placeholder": True,  # Flag to indicate this is a placeholder
+                    })
+                    print(f"Created placeholder audio for {clip['fname']} ({len(placeholder_bytes)} bytes)")
+                    
+                except Exception as placeholder_error:
+                    print(f"Error creating placeholder audio for {clip['fname']}: {placeholder_error}")
+                    clip_payload.update({"sample_rate": None, "content_base64": None})
 
             similar_clip_payloads.append(clip_payload)
 

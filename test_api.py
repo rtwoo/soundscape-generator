@@ -11,7 +11,7 @@ import cv2
 import tempfile
 
 # Configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://sunhacks.see250003.projects.jetstream-cloud.org:8000/health"
 TEST_VIDEO_PATH = "/home/exouser/soundscape-generator/test2.mp4"
 
 def test_health_check():
