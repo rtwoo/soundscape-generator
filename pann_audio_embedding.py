@@ -22,18 +22,24 @@ import soundfile as sf
 import subprocess
 import tempfile
 
-# ---- CONFIG: Edit DB connection ----
-DB_HOST = "database-fsd50k.cluster-cry444mo0lui.us-west-1.rds.amazonaws.com"
-DB_PORT = 5432
-DB_NAME = "postgres"
-DB_USER = "postgres"
-DB_PASS = "rIdDQx7zDwP1GMktXp4f"
+import dotenv
 
+dotenv.load_dotenv()  # Load environment variables from .env file
+
+# ---- CONFIG: Edit DB connection ----
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT"))
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASSWORD")
 # Local audio directory configuration
 LOCAL_AUDIO_DIR = r"C:\Users\rtwoo\Downloads\FSD50K.dev_audio\FSD50K.dev_audio"
 
+import dotenv
+dotenv.load_dotenv()  # Load environment variables from .env file
+
 # Hugging Face token + dataset cache (kept for compatibility but not used with local files)
-HF_TOKEN = "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"  # set this to avoid rate limits
+HF_TOKEN = os.getenv("HF_TOKEN")  # set this to avoid rate limits
 CACHE_DIR = os.path.expanduser("~/.cache/hf_datasets")
 
 # PANNs / preprocessing

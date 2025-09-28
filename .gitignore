@@ -6,3 +6,5 @@ models--Qwen--Qwen2.5-VL-7B-Instruct/
 Adobe Premiere Pro (Beta) Auto-Save/
 *.prin
 *.prproj
+*.jpg
+.env
