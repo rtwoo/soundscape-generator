@@ -149,6 +149,135 @@ function getExportFormats() {
   return formats;
 }
 
+// Add EncoderManager-based export functions
+async function exportFrameWithEncoderManager(sequence, ticks, outputPath, format = "jpg") {
+  try {
+    console.log(`Attempting EncoderManager export at ticks: ${ticks}`);
+    
+    // Check if EncoderManager is available
+    if (!ppro.EncoderManager) {
+      throw new Error("EncoderManager not available");
+    }
+    
+    // Create export settings for frame
+    const exportSettings = {
+      exportType: ppro.EncoderManager.ExportType.FRAME,
+      format: format.toUpperCase(),
+      outputPath: outputPath,
+      width: 1920,
+      height: 1080,
+      useMaximumRenderQuality: true,
+      frameRate: await resolveSequenceFps(sequence)
+    };
+    
+    // Set the time for frame export
+    const tickTime = ppro.TickTime.createWithTicks(ticks.toString());
+    exportSettings.startTime = tickTime;
+    exportSettings.endTime = tickTime;
+    
+    // Start the export
+    const exportJob = await ppro.EncoderManager.startExport(sequence, exportSettings);
+    
+    // Wait for export completion
+    if (exportJob) {
+      return await waitForExportCompletion(exportJob, outputPath);
+    }
+    
+    throw new Error("Export job failed to start");
+    
+  } catch (error) {
+    console.warn("EncoderManager export failed:", error);
+    throw error;
+  }
+}
+
+async function exportVideoSegmentWithEncoderManager(sequence, startTicks, endTicks, outputPath) {
+  try {
+    console.log(`Attempting EncoderManager video export from ${startTicks} to ${endTicks}`);
+    
+    if (!ppro.EncoderManager) {
+      throw new Error("EncoderManager not available");
+    }
+    
+    // Create export settings for video segment
+    const exportSettings = {
+      exportType: ppro.EncoderManager.ExportType.VIDEO,
+      format: "MP4",
+      outputPath: outputPath,
+      width: 1920,
+      height: 1080,
+      useMaximumRenderQuality: true,
+      frameRate: await resolveSequenceFps(sequence),
+      videoBitrate: 10000000, // 10 Mbps
+      audioBitrate: 128000    // 128 kbps
+    };
+    
+    // Set the time range for video export
+    const startTime = ppro.TickTime.createWithTicks(startTicks.toString());
+    const endTime = ppro.TickTime.createWithTicks(endTicks.toString());
+    exportSettings.startTime = startTime;
+    exportSettings.endTime = endTime;
+    
+    // Start the export
+    const exportJob = await ppro.EncoderManager.startExport(sequence, exportSettings);
+    
+    // Wait for export completion
+    if (exportJob) {
+      return await waitForExportCompletion(exportJob, outputPath);
+    }
+    
+    throw new Error("Video export job failed to start");
+    
+  } catch (error) {
+    console.warn("EncoderManager video export failed:", error);
+    throw error;
+  }
+}
+
+async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 30000) {
+  const startTime = Date.now();
+  
+  return new Promise((resolve, reject) => {
+    const checkInterval = setInterval(async () => {
+      try {
+        const status = await exportJob.getStatus();
+        
+        if (status === ppro.EncoderManager.ExportStatus.COMPLETED) {
+          clearInterval(checkInterval);
+          
+          // Verify the file exists
+          try {
+            const fs = require('fs');
+            const stats = await fs.lstat(expectedPath);
+            if (stats.size > 0) {
+              resolve(true);
+            } else {
+              reject(new Error("Export completed but file is empty"));
+            }
+          } catch (fileError) {
+            reject(new Error(`Export completed but file not found: ${fileError.message}`));
+          }
+          
+        } else if (status === ppro.EncoderManager.ExportStatus.FAILED || 
+                   status === ppro.EncoderManager.ExportStatus.CANCELLED) {
+          clearInterval(checkInterval);
+          reject(new Error(`Export ${status.toLowerCase()}`));
+          
+        } else if (Date.now() - startTime > timeoutMs) {
+          clearInterval(checkInterval);
+          reject(new Error("Export timeout"));
+        }
+        
+        // Status is still in progress, continue waiting
+        
+      } catch (statusError) {
+        clearInterval(checkInterval);
+        reject(new Error(`Failed to check export status: ${statusError.message}`));
+      }
+    }, 1000); // Check every second
+  });
+}
+
 async function exportFramesForMoments(sequence, moments) {
   if (!moments?.length) {
     return { frames: [], truncated: false, cleanup: async () => {} };
@@ -253,9 +382,40 @@ async function exportFramesForMoments(sequence, moments) {
       }
       
       const exportStrategies = [
-        // Strategy 1: Create functional placeholder image with frame info
+        // Strategy 1: Use EncoderManager for frame export
         async () => {
-          console.log(`Strategy 1: Creating placeholder image with frame information`);
+          console.log(`Strategy 1: Using EncoderManager for frame export`);
+          
+          try {
+            const success = await exportFrameWithEncoderManager(sequence, moment.ticks, filePath, selectedFormat.format);
+            if (success) {
+              console.log(`EncoderManager frame export succeeded: ${filePath}`);
+              return true;
+            }
+          } catch (encoderError) {
+            console.warn(`EncoderManager export failed: ${encoderError.message}`);
+            throw encoderError;
+          }
+        },
+        
+        // Strategy 2: Use traditional ppro.Exporter
+        async () => {
+          console.log(`Strategy 2: Using ppro.Exporter.exportSequenceFrame`);
+          
+          if (ppro.Exporter && typeof ppro.Exporter.exportSequenceFrame === 'function') {
+            const tickTime = ppro.TickTime.createWithTicks(moment.ticks.toString());
+            const result = ppro.Exporter.exportSequenceFrame(sequence, tickTime, filePath, selectedFormat.format, 1920, 1080);
+            
+            if (result) {
+              return true;
+            }
+          }
+          throw new Error("ppro.Exporter.exportSequenceFrame not available or failed");
+        },
+        
+        // Strategy 3: Create functional placeholder image with frame info
+        async () => {
+          console.log(`Strategy 3: Creating placeholder image with frame information`);
           
           // Create a more substantial placeholder JPEG (100x100 pixels)
           // This is a valid JPEG with a gray background
@@ -432,7 +592,7 @@ async function exportFramesForMoments(sequence, moments) {
             console.log(`Export strategy ${strategyIndex + 1} succeeded!`);
             
             // Track if we used a placeholder strategy
-            if (strategyIndex === 0) { // Strategy 1 is the placeholder strategy
+            if (strategyIndex === 2) { // Strategy 3 is now the placeholder strategy
               usedPlaceholders = true;
             }
             
@@ -1404,6 +1564,183 @@ async function copyAnnotationsToClipboard() {
   }
 }
 
+async function generateAudioFromVideoSegments() {
+  if (!state.scenes.length) {
+    setStatus("Define at least one scene before generating audio from video segments.", "error");
+    return;
+  }
+
+  let cleanup = null;
+
+  try {
+    const sequence = await ensureSequence();
+    setStatus("Exporting video segments for scenes…");
+
+    // Export short video clips for each scene (max 10 seconds each)
+    const videoSegments = [];
+    const maxSegmentDuration = 10 * TICKS_PER_SECOND; // 10 seconds in ticks
+
+    for (let sceneIndex = 0; sceneIndex < Math.min(state.scenes.length, 5); sceneIndex++) {
+      const scene = state.scenes[sceneIndex];
+      const sceneDurationTicks = scene.end.ticks - scene.start.ticks;
+      
+      // Limit segment duration to 10 seconds
+      const segmentEndTicks = Math.min(
+        scene.end.ticks, 
+        scene.start.ticks + maxSegmentDuration
+      );
+      
+      const filename = `scene-${sceneIndex + 1}-segment.mp4`;
+      const tempFolderName = `video-segments-${Date.now()}`;
+      
+      // Create temp folder for video segments
+      let tempFolderPath;
+      try {
+        tempFolderPath = `plugin-temp:/${tempFolderName}`;
+        await fs.mkdir(tempFolderPath, { recursive: true });
+      } catch (error) {
+        tempFolderPath = `plugin-data:/${tempFolderName}`;
+        await fs.mkdir(tempFolderPath, { recursive: true });
+      }
+      
+      const filePath = `${tempFolderPath}/${filename}`;
+      
+      try {
+        console.log(`Exporting video segment for scene ${sceneIndex + 1}: ${scene.start.timecode} to ${formatTimecodeFromSeconds(segmentEndTicks / TICKS_PER_SECOND, state.fps)}`);
+        
+        // Try EncoderManager first
+        await exportVideoSegmentWithEncoderManager(sequence, scene.start.ticks, segmentEndTicks, filePath);
+        
+        // Read the exported video file
+        const binary = await fs.readFile(filePath);
+        if (binary && binary.byteLength > 0) {
+          const blob = new Blob([binary], { type: 'video/mp4' });
+          videoSegments.push({
+            scene,
+            filePath,
+            filename,
+            blob,
+            mime: 'video/mp4',
+            startTicks: scene.start.ticks,
+            endTicks: segmentEndTicks,
+            duration: (segmentEndTicks - scene.start.ticks) / TICKS_PER_SECOND
+          });
+        }
+        
+      } catch (exportError) {
+        console.error(`Failed to export video segment for scene ${sceneIndex + 1}:`, exportError);
+        continue; // Try other scenes
+      }
+    }
+
+    if (!videoSegments.length) {
+      setStatus("Unable to export video segments. Falling back to frame-based processing.", "error");
+      // Fall back to frame-based processing
+      return await generateAudioForKeyframes();
+    }
+
+    setStatus("Uploading video segments to audio service…");
+
+    // Send video segments to the API
+    const formData = new FormData();
+    videoSegments.forEach((segment) => {
+      formData.append("frames", segment.blob, segment.filename); // API expects "frames" field
+    });
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000 * 10); // 10 minute timeout for video
+
+    try {
+      const response = await fetch(PROCESS_FRAMES_ENDPOINT, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Audio service error (${response.status}): ${errorText || response.statusText}`);
+      }
+
+      const payload = await response.json();
+      console.log("Video API Response:", JSON.stringify(payload, null, 2));
+
+      // Process the response same as frame-based processing
+      const audioPayloads = [];
+      
+      if (payload?.generated_audio?.content_base64) {
+        audioPayloads.push({
+          ...payload.generated_audio,
+          label: "Generated soundscape (from video)",
+          source: "generated",
+          metadata: {
+            description: payload.audio_description || "",
+            ...(payload.generated_audio.metadata || {}),
+          },
+        });
+      }
+
+      if (Array.isArray(payload?.similar_clips)) {
+        payload.similar_clips.forEach((clip, index) => {
+          if (clip?.content_base64) {
+            const clipLabel = clip.metadata?.title || clip.fname || `Similar clip ${index + 1}`;
+            audioPayloads.push({
+              ...clip,
+              label: clipLabel,
+              source: "library",
+            });
+          }
+        });
+      }
+
+      if (!audioPayloads.length) {
+        setStatus("Video processing returned no audio clips.", "error");
+        return;
+      }
+
+      setStatus("Saving audio clips to project…");
+      const savedClips = await saveAudioClipsToProject(audioPayloads);
+      state.audioResults = savedClips;
+      renderAudioResults();
+
+      const importedCount = savedClips.filter((clip) => clip.imported).length;
+      setStatus(`Generated audio from ${videoSegments.length} video segments. Imported ${importedCount} clips.`, "success");
+
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        throw new Error("Request timeout: Video processing took too long.");
+      }
+      throw fetchError;
+    }
+
+    // Cleanup video files
+    cleanup = async () => {
+      for (const segment of videoSegments) {
+        try {
+          await fs.unlink(segment.filePath);
+        } catch (error) {
+          console.warn("Unable to remove video segment", error);
+        }
+      }
+    };
+
+  } catch (error) {
+    console.error("generateAudioFromVideoSegments error", error);
+    setStatus(error.message || "Unable to generate audio from video segments.", "error");
+  } finally {
+    if (cleanup) {
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        console.warn("Unable to clean up video segments", cleanupError);
+      }
+    }
+  }
+}
+
 async function generateAudioForKeyframes() {
   if (!state.salientMoments.length) {
     setStatus("Mark at least one salient keyframe before generating audio.", "error");
@@ -1648,6 +1985,10 @@ function registerEventListeners() {
   elements.clearAnnotations?.addEventListener("click", clearAnnotations);
   elements.copyAnnotations?.addEventListener("click", copyAnnotationsToClipboard);
   elements.generateSoundscape?.addEventListener("click", generateAudioForKeyframes);
+  
+  // Add event listener for video segment generation
+  const generateFromVideoBtn = document.getElementById("generate-from-video");
+  generateFromVideoBtn?.addEventListener("click", generateAudioFromVideoSegments);
 }
 
 function init() {

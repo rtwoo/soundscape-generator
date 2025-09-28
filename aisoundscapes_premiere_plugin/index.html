@@ -59,11 +59,19 @@
 
       <section class="panel-section" id="export-section">
         <div class="section-header">
+          <sp-heading size="S">Audio Generation</sp-heading>
+          <div class="section-actions">
+            <sp-button id="generate-from-video" variant="cta" size="s"
+              >Generate from video segments</sp-button
+            >
+            <sp-button id="generate-soundscape" variant="primary" size="s"
+              >Generate from keyframes</sp-button
+            >
+          </div>
+        </div>
+        <div class="section-header">
           <sp-heading size="S">Annotations</sp-heading>
           <div class="section-actions">
-            <sp-button id="generate-soundscape" variant="cta" size="s"
-              >Generate audio from keyframes</sp-button
-            >
             <sp-button id="copy-annotations" variant="primary" size="s"
               >Copy JSON</sp-button
             >

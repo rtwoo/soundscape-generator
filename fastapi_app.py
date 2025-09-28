@@ -214,7 +214,7 @@ async def process_frames(frames: List[UploadFile] = File(...)):
 
         # Encode generated audio
         generated_audio_payload = None
-        if audio and len(audio) > 0:
+        if audio.any():
             try:
                 print(f"Encoding generated audio: shape={audio[0].shape}")
                 generated_buffer = io.BytesIO()
