@@ -13,7 +13,12 @@
   "manifestVersion": 5,
   "requiredPermissions": {
     "localFileSystem": "request",
-    "clipboard": "readAndWrite"
+    "clipboard": "readAndWrite",
+    "webExecution": "request",
+    "allowCodeGenerationFromStrings": true,
+    "network": {
+      "domains": "all"
+    }
   },
   "entrypoints": [
     {
