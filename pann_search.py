@@ -20,12 +20,15 @@ from pann_audio_embedding import (
     ORIG_EMBED_DIM
 ) 
 
+import dotenv
+dotenv.load_dotenv()  # Load environment variables from .env file
+
 # ---- CONFIG: Edit DB connection ----
-DB_HOST = "database-fsd50k.cluster-cry444mo0lui.us-west-1.rds.amazonaws.com"
-DB_PORT = 5432
-DB_NAME = "postgres"
-DB_USER = "postgres"
-DB_PASS = "rIdDQx7zDwP1GMktXp4f"
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT", 5432))
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASSWORD")
 
 class AudioSimilaritySearcher:
     """

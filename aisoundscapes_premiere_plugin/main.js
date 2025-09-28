@@ -39,37 +39,36 @@ async function readLightningFrames(frameFolder, salientMoments = null) {
     const frames = [];
     const entries = await frameFolder.getEntries();
     
-    // Filter and sort lightning frames (lightning000.jpg, lightning001.jpg, etc.)
-    const lightningFiles = entries
+    // Filter and sort frames based on trailing 3 digits (any000.jpg, frame001.jpg, etc.)
+    const frameFiles = entries
       .filter(entry => {
         if (entry.isFile) {
           const name = entry.name.toLowerCase();
-          return name.startsWith('lightning') && 
-                 (name.endsWith('.jpg') || name.endsWith('.jpeg')) &&
-                 /lightning\d{3}\.(jpg|jpeg)$/i.test(name);
+          return (name.endsWith('.jpg') || name.endsWith('.jpeg')) &&
+                 /\d{3}\.(jpg|jpeg)$/i.test(name);
         }
         return false;
       })
       .sort((a, b) => {
-        // Extract frame numbers and sort numerically
+        // Extract frame numbers from the last 3 digits before the extension and sort numerically
         const getFrameNumber = (filename) => {
-          const match = filename.match(/lightning(\d{3})/i);
+          const match = filename.match(/(\d{3})\.(jpg|jpeg)$/i);
           return match ? parseInt(match[1]) : 0;
         };
         return getFrameNumber(a.name) - getFrameNumber(b.name);
       });
 
-    if (lightningFiles.length === 0) {
+    if (frameFiles.length === 0) {
       throw new Error(
-        "No lightning frames found in the selected directory.\n" +
-        "Expected files named: lightning000.jpg, lightning001.jpg, lightning002.jpg, etc."
+        "No frame files found in the selected directory.\n" +
+        "Expected files with 3-digit frame numbers: any000.jpg, frame001.jpg, export002.jpg, etc."
       );
     }
 
-    console.log(`Found ${lightningFiles.length} total lightning frames`);
+    console.log(`Found ${frameFiles.length} total frame files`);
 
     // Filter by salient moments if provided
-    let filteredFiles = lightningFiles;
+    let filteredFiles = frameFiles;
     if (salientMoments && salientMoments.length > 0) {
       console.log(`Filtering frames based on ${salientMoments.length} salient moments`);
       
@@ -80,8 +79,8 @@ async function readLightningFrames(frameFolder, salientMoments = null) {
       
       console.log(`Looking for frames matching salient frame numbers: ${Array.from(salientFrameNumbers).sort((a, b) => a - b).join(', ')}`);
       
-      filteredFiles = lightningFiles.filter(file => {
-        const frameMatch = file.name.match(/lightning(\d{3})/i);
+      filteredFiles = frameFiles.filter(file => {
+        const frameMatch = file.name.match(/(\d{3})\.(jpg|jpeg)$/i);
         const frameNumber = frameMatch ? parseInt(frameMatch[1]) : -1;
         return salientFrameNumbers.has(frameNumber);
       });
@@ -89,16 +88,16 @@ async function readLightningFrames(frameFolder, salientMoments = null) {
       console.log(`After filtering: ${filteredFiles.length} frames match salient moments`);
       
       if (filteredFiles.length === 0) {
-        const availableFrames = lightningFiles.map(file => {
-          const frameMatch = file.name.match(/lightning(\d{3})/i);
+        const availableFrames = frameFiles.map(file => {
+          const frameMatch = file.name.match(/(\d{3})\.(jpg|jpeg)$/i);
           return frameMatch ? parseInt(frameMatch[1]) : -1;
         }).filter(num => num >= 0).sort((a, b) => a - b);
         
         throw new Error(
-          `No lightning frames match the salient keyframes.\n` +
+          `No frame files match the salient keyframes.\n` +
           `Salient keyframe frame numbers: ${Array.from(salientFrameNumbers).sort((a, b) => a - b).join(', ')}\n` +
-          `Available lightning frame numbers: ${availableFrames.join(', ')}\n` +
-          `Make sure your exported lightning frames correspond to the marked salient moments.`
+          `Available frame numbers: ${availableFrames.join(', ')}\n` +
+          `Make sure your exported frame files correspond to the marked salient moments.`
         );
       }
     }
@@ -111,8 +110,8 @@ async function readLightningFrames(frameFolder, salientMoments = null) {
         if (binary && binary.byteLength > 0) {
           const blob = new Blob([binary], { type: 'image/jpeg' });
           
-          // Extract frame number from filename
-          const frameMatch = file.name.match(/lightning(\d{3})/i);
+          // Extract frame number from filename (last 3 digits before extension)
+          const frameMatch = file.name.match(/(\d{3})\.(jpg|jpeg)$/i);
           const frameNumber = frameMatch ? parseInt(frameMatch[1]) : i;
           
           frames.push({
@@ -133,17 +132,17 @@ async function readLightningFrames(frameFolder, salientMoments = null) {
     }
 
     if (frames.length === 0) {
-      throw new Error("No valid lightning frames could be read from the directory");
+      throw new Error("No valid frame files could be read from the directory");
     }
 
     const filterInfo = salientMoments && salientMoments.length > 0 
-      ? ` (filtered from ${lightningFiles.length} total frames based on salient moments)`
+      ? ` (filtered from ${frameFiles.length} total frames based on salient moments)`
       : '';
-    console.log(`Successfully loaded ${frames.length} lightning frames${filterInfo}`);
+    console.log(`Successfully loaded ${frames.length} frame files${filterInfo}`);
     return frames;
     
   } catch (error) {
-    console.error("Error reading lightning frames:", error);
+    console.error("Error reading frame files:", error);
     throw error;
   }
 }
