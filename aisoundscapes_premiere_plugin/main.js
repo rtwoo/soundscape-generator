@@ -33,8 +33,8 @@ async function selectFrameDirectory() {
   }
 }
 
-// Read lightning frames from the selected directory
-async function readLightningFrames(frameFolder) {
+// Read lightning frames from the selected directory, optionally filtered by salient moments
+async function readLightningFrames(frameFolder, salientMoments = null) {
   try {
     const frames = [];
     const entries = await frameFolder.getEntries();
@@ -66,11 +66,46 @@ async function readLightningFrames(frameFolder) {
       );
     }
 
-    console.log(`Found ${lightningFiles.length} lightning frames`);
+    console.log(`Found ${lightningFiles.length} total lightning frames`);
 
-    // Read each frame file
-    for (let i = 0; i < lightningFiles.length; i++) {
-      const file = lightningFiles[i];
+    // Filter by salient moments if provided
+    let filteredFiles = lightningFiles;
+    if (salientMoments && salientMoments.length > 0) {
+      console.log(`Filtering frames based on ${salientMoments.length} salient moments`);
+      
+      // Create a set of frame numbers from salient moments for efficient lookup
+      const salientFrameNumbers = new Set(
+        salientMoments.map(moment => moment.frames).filter(frameNum => Number.isFinite(frameNum))
+      );
+      
+      console.log(`Looking for frames matching salient frame numbers: ${Array.from(salientFrameNumbers).sort((a, b) => a - b).join(', ')}`);
+      
+      filteredFiles = lightningFiles.filter(file => {
+        const frameMatch = file.name.match(/lightning(\d{3})/i);
+        const frameNumber = frameMatch ? parseInt(frameMatch[1]) : -1;
+        return salientFrameNumbers.has(frameNumber);
+      });
+      
+      console.log(`After filtering: ${filteredFiles.length} frames match salient moments`);
+      
+      if (filteredFiles.length === 0) {
+        const availableFrames = lightningFiles.map(file => {
+          const frameMatch = file.name.match(/lightning(\d{3})/i);
+          return frameMatch ? parseInt(frameMatch[1]) : -1;
+        }).filter(num => num >= 0).sort((a, b) => a - b);
+        
+        throw new Error(
+          `No lightning frames match the salient keyframes.\n` +
+          `Salient keyframe frame numbers: ${Array.from(salientFrameNumbers).sort((a, b) => a - b).join(', ')}\n` +
+          `Available lightning frame numbers: ${availableFrames.join(', ')}\n` +
+          `Make sure your exported lightning frames correspond to the marked salient moments.`
+        );
+      }
+    }
+
+    // Read each filtered frame file
+    for (let i = 0; i < filteredFiles.length; i++) {
+      const file = filteredFiles[i];
       try {
         const binary = await file.read({ format: formats.binary });
         if (binary && binary.byteLength > 0) {
@@ -101,7 +136,10 @@ async function readLightningFrames(frameFolder) {
       throw new Error("No valid lightning frames could be read from the directory");
     }
 
-    console.log(`Successfully loaded ${frames.length} lightning frames`);
+    const filterInfo = salientMoments && salientMoments.length > 0 
+      ? ` (filtered from ${lightningFiles.length} total frames based on salient moments)`
+      : '';
+    console.log(`Successfully loaded ${frames.length} lightning frames${filterInfo}`);
     return frames;
     
   } catch (error) {
@@ -1855,17 +1893,34 @@ async function generateAudioFromLightningFrames() {
     // Prompt user to select directory containing lightning frames
     const frameFolder = await selectFrameDirectory();
     
-    setStatus("Reading lightning frames from directory...");
+    // Check if we have salient moments to filter by
+    const hasSalientMoments = state.salientMoments && state.salientMoments.length > 0;
     
-    // Read all lightning frames from the directory
-    const frames = await readLightningFrames(frameFolder);
+    if (hasSalientMoments) {
+      setStatus(`Reading lightning frames from directory (filtering by ${state.salientMoments.length} salient moments)...`);
+      console.log("Salient moments available for filtering:", state.salientMoments.map(m => `Frame ${m.frames} at ${m.timecode}`));
+    } else {
+      setStatus("Reading all lightning frames from directory (no salient moments marked)...");
+      console.log("No salient moments marked, will process all lightning frames");
+      console.log("Tip: Mark salient moments in your timeline first to process only specific frames");
+    }
+    
+    // Read lightning frames from the directory, filtered by salient moments if available
+    const frames = await readLightningFrames(frameFolder, state.salientMoments);
     
     if (frames.length === 0) {
       setStatus("No lightning frames found in the selected directory.", "error");
       return;
     }
 
-    setStatus(`Found ${frames.length} lightning frames. Uploading to audio service...`);
+    // Provide detailed status message about what was found
+    let statusMessage;
+    if (hasSalientMoments) {
+      statusMessage = `Found ${frames.length} lightning frames matching salient moments. Uploading to audio service...`;
+    } else {
+      statusMessage = `Found ${frames.length} lightning frames. Uploading to audio service...`;
+    }
+    setStatus(statusMessage);
 
     // Create form data with the frames
     const formData = new FormData();
@@ -1979,7 +2034,15 @@ async function generateAudioFromLightningFrames() {
 
       const importedCount = savedClips.filter((clip) => clip.imported).length;
       const savedCount = savedClips.length;
-      let successMessage = `Generated audio from ${frames.length} lightning frames.`;
+      
+      // Create success message with filtering context
+      let successMessage;
+      if (hasSalientMoments) {
+        successMessage = `Generated audio from ${frames.length} lightning frames (filtered by salient moments).`;
+      } else {
+        successMessage = `Generated audio from ${frames.length} lightning frames.`;
+      }
+      
       if (importedCount) {
         successMessage += ` Imported ${importedCount} audio clip${importedCount === 1 ? "" : "s"} into the project.`;
       }
