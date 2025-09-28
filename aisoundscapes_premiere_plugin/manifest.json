@@ -13,22 +13,9 @@
   "manifestVersion": 5,
   "requiredPermissions": {
     "localFileSystem": "request",
-    "clipboard": "readAndWrite", 
-    "webExecution": "request",
-    "allowCodeGenerationFromStrings": true,
+    "clipboard": "readAndWrite",
     "network": {
       "domains": "all"
-    },
-    "launchProcess": {
-      "schemes": ["https"],
-      "extensions": [".exe"]
-    },
-    "webview": {
-      "allow": "yes",
-      "domains": ["*"]
-    },
-    "ipc": {
-      "enablePluginCommunication": true
     }
   },
   "entrypoints": [

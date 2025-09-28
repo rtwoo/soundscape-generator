@@ -14,43 +14,100 @@
 
 const ppro = require("premierepro");
 const { storage } = require("uxp");
-const fs = require("fs");
 
-// Add version check to help with cache issues
-console.log("Plugin loaded - Version: 2025-09-28-v4");
+console.log("Plugin loaded - Version: 2025-09-28-v5-simplified");
 
 const { localFileSystem, formats } = storage;
 
-// Debug function to explore available export APIs
-function debugExportAPIs() {
-  console.log("=== DEBUGGING PREMIERE PRO EXPORT APIS ===");
-  console.log("ppro object properties:", Object.getOwnPropertyNames(ppro));
-  
-  if (ppro.EncoderManager) {
-    console.log("ppro.EncoderManager available:", Object.getOwnPropertyNames(ppro.EncoderManager));
-    if (ppro.EncoderManager.ExportType) {
-      console.log("EncoderManager.ExportType:", ppro.EncoderManager.ExportType);
+// Prompt user to select directory containing manually exported frames
+async function selectFrameDirectory() {
+  try {
+    const folder = await localFileSystem.getFolder();
+    if (!folder) {
+      throw new Error("No folder selected");
     }
-    if (ppro.EncoderManager.ExportStatus) {
-      console.log("EncoderManager.ExportStatus:", ppro.EncoderManager.ExportStatus);
+    return folder;
+  } catch (error) {
+    console.error("Error selecting frame directory:", error);
+    throw new Error("Failed to select frame directory: " + error.message);
+  }
+}
+
+// Read lightning frames from the selected directory
+async function readLightningFrames(frameFolder) {
+  try {
+    const frames = [];
+    const entries = await frameFolder.getEntries();
+    
+    // Filter and sort lightning frames (lightning000.jpg, lightning001.jpg, etc.)
+    const lightningFiles = entries
+      .filter(entry => {
+        if (entry.isFile) {
+          const name = entry.name.toLowerCase();
+          return name.startsWith('lightning') && 
+                 (name.endsWith('.jpg') || name.endsWith('.jpeg')) &&
+                 /lightning\d{3}\.(jpg|jpeg)$/i.test(name);
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        // Extract frame numbers and sort numerically
+        const getFrameNumber = (filename) => {
+          const match = filename.match(/lightning(\d{3})/i);
+          return match ? parseInt(match[1]) : 0;
+        };
+        return getFrameNumber(a.name) - getFrameNumber(b.name);
+      });
+
+    if (lightningFiles.length === 0) {
+      throw new Error(
+        "No lightning frames found in the selected directory.\n" +
+        "Expected files named: lightning000.jpg, lightning001.jpg, lightning002.jpg, etc."
+      );
     }
-  } else {
-    console.log("ppro.EncoderManager: NOT AVAILABLE");
+
+    console.log(`Found ${lightningFiles.length} lightning frames`);
+
+    // Read each frame file
+    for (let i = 0; i < lightningFiles.length; i++) {
+      const file = lightningFiles[i];
+      try {
+        const binary = await file.read({ format: formats.binary });
+        if (binary && binary.byteLength > 0) {
+          const blob = new Blob([binary], { type: 'image/jpeg' });
+          
+          // Extract frame number from filename
+          const frameMatch = file.name.match(/lightning(\d{3})/i);
+          const frameNumber = frameMatch ? parseInt(frameMatch[1]) : i;
+          
+          frames.push({
+            filename: file.name,
+            blob: blob,
+            mime: 'image/jpeg',
+            frameNumber: frameNumber,
+            size: binary.byteLength
+          });
+          
+          console.log(`Loaded frame ${frameNumber}: ${file.name} (${binary.byteLength} bytes)`);
+        } else {
+          console.warn(`Frame ${file.name} is empty, skipping`);
+        }
+      } catch (readError) {
+        console.error(`Failed to read frame ${file.name}:`, readError);
+      }
+    }
+
+    if (frames.length === 0) {
+      throw new Error("No valid lightning frames could be read from the directory");
+    }
+
+    console.log(`Successfully loaded ${frames.length} lightning frames`);
+    return frames;
+    
+  } catch (error) {
+    console.error("Error reading lightning frames:", error);
+    throw error;
   }
-  
-  if (ppro.Exporter) {
-    console.log("ppro.Exporter available:", Object.getOwnPropertyNames(ppro.Exporter));
-  } else {
-    console.log("ppro.Exporter: NOT AVAILABLE");
-  }
-  
-  if (ppro.MediaEncoder) {
-    console.log("ppro.MediaEncoder available:", Object.getOwnPropertyNames(ppro.MediaEncoder));
-  } else {
-    console.log("ppro.MediaEncoder: NOT AVAILABLE");
-  }
-  
-  console.log("=== END EXPORT API DEBUG ===");
 }
 
 const API_BASE_URL =
@@ -364,7 +421,12 @@ async function exportVideoSegmentWithEncoderManager(sequence, startTicks, endTic
       }
     }
     
-    throw lastError || new Error("All video export strategies failed");\n    \n  } catch (error) {\n    console.warn(\"EncoderManager video export failed:\", error);\n    throw error;\n  }\n}
+    throw lastError || new Error("All video export strategies failed");
+  } catch (error) {
+    console.warn("EncoderManager video export failed:", error);
+    throw error;
+  }
+}
 
 async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 30000) {
   const startTime = Date.now();
@@ -1783,285 +1845,37 @@ async function copyAnnotationsToClipboard() {
   }
 }
 
-async function generateAudioFromVideoSegments() {
-  if (!state.scenes.length) {
-    setStatus("Define at least one scene before generating audio from video segments.", "error");
-    return;
-  }
+// Old video segment generation function removed - plugin now uses manual lightning frame export
 
-  let cleanup = null;
-
+// New function to generate audio from manually exported lightning frames
+async function generateAudioFromLightningFrames() {
   try {
-    const sequence = await ensureSequence();
-    setStatus("Exporting video segments for scenes…");
+    setStatus("Please select the folder containing your exported lightning frames...");
 
-    // Export short video clips for each scene (max 10 seconds each)
-    const videoSegments = [];
-    const maxSegmentDuration = 10 * TICKS_PER_SECOND; // 10 seconds in ticks
-    let tempFolder = null; // Store temp folder reference for cleanup
-
-    for (let sceneIndex = 0; sceneIndex < Math.min(state.scenes.length, 5); sceneIndex++) {
-      const scene = state.scenes[sceneIndex];
-      const sceneDurationTicks = scene.end.ticks - scene.start.ticks;
-      
-      // Limit segment duration to 10 seconds
-      const segmentEndTicks = Math.min(
-        scene.end.ticks, 
-        scene.start.ticks + maxSegmentDuration
-      );
-      
-      const filename = `scene-${sceneIndex + 1}-segment.mp4`;
-      const tempFolderName = `video-segments-${Date.now()}`;
-      
-      // Create temp folder for video segments using UXP storage API
-      let tempFolder;
-      let tempFolderPath;
-      try {
-        const dataFolder = await localFileSystem.getDataFolder();
-        tempFolder = await dataFolder.createFolder(tempFolderName);
-        tempFolderPath = tempFolder.nativePath || `plugin-data:/${tempFolderName}`;
-      } catch (error) {
-        console.error("Failed to create temp folder:", error);
-        throw new Error(`Unable to create temporary folder: ${error.message}`);
-      }
-      
-      // Create the file entry using storage API
-      const fileEntry = await tempFolder.createFile(filename, { overwrite: true });
-      const filePath = resolveNativePath(fileEntry);
-      
-      try {
-        console.log(`Exporting video segment for scene ${sceneIndex + 1}: ${scene.start.timecode} to ${formatTimecodeFromSeconds(segmentEndTicks / TICKS_PER_SECOND, state.fps)}`);
-        
-        // Try EncoderManager first
-        await exportVideoSegmentWithEncoderManager(sequence, scene.start.ticks, segmentEndTicks, filePath);
-        
-        // Read the exported video file using storage API
-        const binary = await fileEntry.read({ format: formats.binary });
-        if (binary && binary.byteLength > 0) {
-          const blob = new Blob([binary], { type: 'video/mp4' });
-          videoSegments.push({
-            scene,
-            filePath,
-            filename,
-            blob,
-            mime: 'video/mp4',
-            fileEntry,  // Store the file entry for cleanup
-            startTicks: scene.start.ticks,
-            endTicks: segmentEndTicks,
-            duration: (segmentEndTicks - scene.start.ticks) / TICKS_PER_SECOND
-          });
-        }
-        
-      } catch (exportError) {
-        console.error(`Failed to export video segment for scene ${sceneIndex + 1}:`, exportError);
-        continue; // Try other scenes
-      }
-    }
-
-    if (!videoSegments.length) {
-      setStatus("Unable to export video segments. Falling back to frame-based processing.", "error");
-      // Fall back to frame-based processing
-      return await generateAudioForKeyframes();
-    }
-
-    setStatus("Uploading video segments to audio service…");
-
-    // Send video segments to the API
-    const formData = new FormData();
-    videoSegments.forEach((segment) => {
-      formData.append("frames", segment.blob, segment.filename); // API expects "frames" field
-    });
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000 * 10); // 10 minute timeout for video
-
-    try {
-      const response = await fetch(PROCESS_FRAMES_ENDPOINT, {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        throw new Error(`Audio service error (${response.status}): ${errorText || response.statusText}`);
-      }
-
-      const payload = await response.json();
-      console.log("Video API Response:", JSON.stringify(payload, null, 2));
-
-      // Process the response same as frame-based processing
-      const audioPayloads = [];
-      
-      if (payload?.generated_audio?.content_base64) {
-        audioPayloads.push({
-          ...payload.generated_audio,
-          label: "Generated soundscape (from video)",
-          source: "generated",
-          metadata: {
-            description: payload.audio_description || "",
-            ...(payload.generated_audio.metadata || {}),
-          },
-        });
-      }
-
-      if (Array.isArray(payload?.similar_clips)) {
-        payload.similar_clips.forEach((clip, index) => {
-          if (clip?.content_base64) {
-            const clipLabel = clip.metadata?.title || clip.fname || `Similar clip ${index + 1}`;
-            audioPayloads.push({
-              ...clip,
-              label: clipLabel,
-              source: "library",
-            });
-          }
-        });
-      }
-
-      if (!audioPayloads.length) {
-        setStatus("Video processing returned no audio clips.", "error");
-        return;
-      }
-
-      setStatus("Saving audio clips to project…");
-      const savedClips = await saveAudioClipsToProject(audioPayloads);
-      state.audioResults = savedClips;
-      renderAudioResults();
-
-      const importedCount = savedClips.filter((clip) => clip.imported).length;
-      setStatus(`Generated audio from ${videoSegments.length} video segments. Imported ${importedCount} clips.`, "success");
-
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      if (fetchError.name === 'AbortError') {
-        throw new Error("Request timeout: Video processing took too long.");
-      }
-      throw fetchError;
-    }
-
-    // Cleanup video files
-    cleanup = async () => {
-      for (const segment of videoSegments) {
-        try {
-          if (segment.fileEntry) {
-            await segment.fileEntry.delete();
-          }
-        } catch (error) {
-          console.warn("Unable to remove video segment", error);
-        }
-      }
-      
-      // Try to remove the temp folder
-      if (tempFolder) {
-        try {
-          await tempFolder.delete();
-        } catch (error) {
-          console.warn("Unable to remove temp folder", error);
-        }
-      }
-    };
-
-  } catch (error) {
-    console.error("generateAudioFromVideoSegments error", error);
-    setStatus(error.message || "Unable to generate audio from video segments.", "error");
-  } finally {
-    if (cleanup) {
-      try {
-        await cleanup();
-      } catch (cleanupError) {
-        console.warn("Unable to clean up video segments", cleanupError);
-      }
-    }
-  }
-}
-
-async function generateAudioForKeyframes() {
-  if (!state.salientMoments.length) {
-    setStatus("Mark at least one salient keyframe before generating audio.", "error");
-    return;
-  }
-
-  let cleanup = null;
-
-  try {
-    // DEBUG: Log to help identify cached code issues
-    console.log("generateAudioForKeyframes: Starting frame export process...");
-    console.log("Available storage methods:", Object.keys(storage || {}));
-    console.log("Available localFileSystem methods:", localFileSystem ? Object.keys(localFileSystem) : "undefined");
+    // Prompt user to select directory containing lightning frames
+    const frameFolder = await selectFrameDirectory();
     
-    // NOTE: If you're still seeing localFileSystem errors, 
-    // try hard-refreshing the plugin or restarting Premiere Pro
-    const sequence = await ensureSequence();
-
-    setStatus("Exporting salient keyframe frames…");
+    setStatus("Reading lightning frames from directory...");
     
-    // Add comprehensive API availability check
-    console.log("Checking available APIs...");
-    console.log("ppro object:", ppro ? "available" : "undefined");
-    console.log("ppro.Exporter:", ppro.Exporter ? "available" : "undefined");
-    console.log("ppro.Exporter.exportSequenceFrame:", ppro.Exporter ? typeof ppro.Exporter.exportSequenceFrame : "N/A");
+    // Read all lightning frames from the directory
+    const frames = await readLightningFrames(frameFolder);
     
-    // Check for alternative export methods
-    const project = await ppro.Project.getActiveProject();
-    console.log("project object:", project ? "available" : "undefined");
-    if (project) {
-      console.log("Available project methods:", Object.getOwnPropertyNames(project).filter(name => 
-        typeof project[name] === "function" && name.toLowerCase().includes("export")
-      ));
-    }
-    console.log("Available sequence methods:", Object.getOwnPropertyNames(sequence).filter(name => 
-      typeof sequence[name] === "function" && name.toLowerCase().includes("export")
-    ));
-    
-    // Check if we have any export capability at all
-    const hasExportCapability = 
-      (ppro.Exporter && typeof ppro.Exporter.exportSequenceFrame === "function") ||
-      (project && typeof project.exportFrame === "function") ||
-      (sequence && (typeof sequence.exportFrame === "function" || typeof sequence.renderFrame === "function"));
-    
-    if (!hasExportCapability) {
-      throw new Error(
-        "No frame export functionality is available. This may be due to:\n" +
-        "1. Your Premiere Pro version doesn't support frame export APIs\n" +
-        "2. Missing permissions in the manifest\n" +
-        "3. The plugin needs different API access\n" +
-        "Please check the console for available methods."
-      );
-    }
-    
-    const exportResult = await exportFramesForMoments(sequence, state.salientMoments);
-    cleanup = exportResult.cleanup;
-
-    if (!exportResult.frames.length) {
-      setStatus(
-        "Unable to export frames for the selected keyframes. " +
-        "Check that your sequence has video content at the selected timestamps.",
-        "error"
-      );
+    if (frames.length === 0) {
+      setStatus("No lightning frames found in the selected directory.", "error");
       return;
     }
 
-    // Check if we used placeholder images
-    if (exportResult.usedPlaceholders) {
-      setStatus("Using placeholder images for frame export (Premiere Pro export API not fully supported). Audio generation will continue...");
-    }
+    setStatus(`Found ${frames.length} lightning frames. Uploading to audio service...`);
 
-    if (exportResult.truncated) {
-      console.warn(`Only the first ${MAX_FRAMES_PER_REQUEST} keyframes were sent to the service.`);
-      setStatus(`Processing ${exportResult.frames.length} of ${state.salientMoments.length} keyframes…`);
-    }
-
+    // Create form data with the frames
     const formData = new FormData();
-    exportResult.frames.forEach((frame) => {
+    frames.forEach((frame) => {
       formData.append("frames", frame.blob, frame.filename);
     });
 
-    setStatus("Uploading frames to audio service…");
-
+    // Send to the API
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000*5); // 5 minute timeout
+    const timeoutId = setTimeout(() => controller.abort(), 60000 * 5); // 5 minute timeout
 
     try {
       const response = await fetch(PROCESS_FRAMES_ENDPOINT, {
@@ -2091,10 +1905,11 @@ async function generateAudioForKeyframes() {
         console.log("Found generated audio with content");
         audioPayloads.push({
           ...payload.generated_audio,
-          label: "Generated soundscape",
+          label: "Generated soundscape from lightning frames",
           source: "generated",
           metadata: {
             description: payload.audio_description || "",
+            frameCount: frames.length,
             ...(payload.generated_audio.metadata || {}),
           },
         });
@@ -2164,13 +1979,9 @@ async function generateAudioForKeyframes() {
 
       const importedCount = savedClips.filter((clip) => clip.imported).length;
       const savedCount = savedClips.length;
-      let successMessage = `Saved ${savedCount} audio clip${savedCount === 1 ? "" : "s"}.`;
+      let successMessage = `Generated audio from ${frames.length} lightning frames.`;
       if (importedCount) {
-        successMessage = `Imported ${importedCount} audio clip${importedCount === 1 ? "" : "s"} into the project.`;
-      }
-
-      if (exportResult.truncated) {
-        successMessage += ` (Only the first ${MAX_FRAMES_PER_REQUEST} keyframes were processed.)`;
+        successMessage += ` Imported ${importedCount} audio clip${importedCount === 1 ? "" : "s"} into the project.`;
       }
 
       setStatus(successMessage, "success");
@@ -2184,30 +1995,18 @@ async function generateAudioForKeyframes() {
     }
     
   } catch (error) {
-    console.error("generateAudioForKeyframes error", error);
+    console.error("generateAudioFromLightningFrames error", error);
     
-    // Provide more specific error messages
-    let errorMessage = error.message || "Unable to generate audio from keyframes.";
+    let errorMessage = error.message || "Unable to generate audio from lightning frames.";
     
-    if (error.message && error.message.includes("exportSequenceFrame")) {
-      errorMessage = "Frame export failed. Please ensure:\n" +
-        "• Your Premiere Pro version supports frame export\n" +
-        "• The plugin has the necessary permissions\n" +
-        "• The sequence contains video content at the selected timestamps";
+    if (error.message && error.message.includes("No folder selected")) {
+      errorMessage = "Please select a folder containing your exported lightning frames.";
     } else if (error.message && error.message.includes("fetch")) {
       errorMessage = "Network error: Unable to connect to the audio service. " + 
         "Please check your internet connection and ensure the API server is running.";
     }
     
     setStatus(errorMessage, "error");
-  } finally {
-    if (cleanup) {
-      try {
-        await cleanup();
-      } catch (cleanupError) {
-        console.warn("Unable to clean up exported frames", cleanupError);
-      }
-    }
   }
 }
 
@@ -2220,17 +2019,11 @@ function registerEventListeners() {
   elements.refreshSequence?.addEventListener("click", refreshSequence);
   elements.clearAnnotations?.addEventListener("click", clearAnnotations);
   elements.copyAnnotations?.addEventListener("click", copyAnnotationsToClipboard);
-  elements.generateSoundscape?.addEventListener("click", generateAudioForKeyframes);
-  
-  // Add event listener for video segment generation
-  const generateFromVideoBtn = document.getElementById("generate-from-video");
-  generateFromVideoBtn?.addEventListener("click", generateAudioFromVideoSegments);
+  // Use the new lightning frames function instead of the old export-based one
+  elements.generateSoundscape?.addEventListener("click", generateAudioFromLightningFrames);
 }
 
 function init() {
-  // Debug available export APIs on startup
-  debugExportAPIs();
-  
   registerEventListeners();
   render();
   refreshSequence();

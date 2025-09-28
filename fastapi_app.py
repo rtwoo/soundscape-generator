@@ -123,6 +123,12 @@ async def process_frames(frames: List[UploadFile] = File(...)):
                 temp_frame_paths.append(temp_frame_path)
                 content = await frame.read()
                 temp_frame.write(content)
+                # Also save to images directory
+                images_dir = "images"
+                os.makedirs(images_dir, exist_ok=True)
+                image_save_path = os.path.join(images_dir, f"frame_{i+1:03d}{original_ext}")
+                with open(image_save_path, "wb") as img_file:
+                    img_file.write(content)
                 print(f"Saved frame {i+1}: {frame.filename}")
         
         # Step 1: Generate audio description using Qwen2.5-VL
@@ -340,7 +346,7 @@ async def process_frames(frames: List[UploadFile] = File(...)):
             "similar_clips": similar_clip_payloads,
             "total_results": len(similar_clip_payloads)
         }
-        print(response)
+        # print(response)
         
         return JSONResponse(content=response)
         
