@@ -1,17 +1,20 @@
 import os
+import io
+import base64
 import tempfile
 import traceback
 from typing import List, Dict, Any
 
 import torch
 import scipy.io.wavfile
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+import soundfile as sf
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 from diffusers import AudioLDM2Pipeline
 
-from pann_search import search_similar_audio
+from pann_search import AudioSimilaritySearcher
 
 app = FastAPI(
     title="Frame-to-Audio Similarity API",
@@ -23,10 +26,11 @@ app = FastAPI(
 qwen_model = None
 qwen_processor = None
 audioldm_pipe = None
+audio_searcher = None
 
 def initialize_models():
     """Initialize all models on startup"""
-    global qwen_model, qwen_processor, audioldm_pipe
+    global qwen_model, qwen_processor, audioldm_pipe, audio_searcher
     
     print("Loading Qwen2.5-VL model...")
     qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -50,6 +54,16 @@ def initialize_models():
     audioldm_pipe = audioldm_pipe.to(qwen_model.device)
     
     print("Models loaded successfully!")
+
+    ensure_audio_searcher()
+
+
+def ensure_audio_searcher():
+    global audio_searcher
+    if audio_searcher is None:
+        print("Initializing audio similarity searcher...")
+        audio_searcher = AudioSimilaritySearcher()
+        print("Audio similarity searcher ready!")
 
 @app.on_event("startup")
 async def startup_event():
@@ -89,10 +103,10 @@ async def process_frames(frames: List[UploadFile] = File(...)):
     
     # Validate file types
     for frame in frames:
-        if not frame.filename.lower().endswith(('.jpg', '.jpeg')):
+        if not frame.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
             raise HTTPException(
                 status_code=400, 
-                detail=f"Only JPG files are supported. Invalid file: {frame.filename}"
+                detail=f"Only JPG or PNG files are supported. Invalid file: {frame.filename}"
             )
     
     temp_frame_paths = []
@@ -102,7 +116,8 @@ async def process_frames(frames: List[UploadFile] = File(...)):
         # Save uploaded frames to temporary files
         print(f"Processing {len(frames)} frames")
         for i, frame in enumerate(frames):
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_frame:
+            original_ext = os.path.splitext(frame.filename or "frame.jpg")[1] or ".jpg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=original_ext) as temp_frame:
                 temp_frame_path = temp_frame.name
                 temp_frame_paths.append(temp_frame_path)
                 content = await frame.read()
@@ -183,22 +198,73 @@ async def process_frames(frames: List[UploadFile] = File(...)):
         
         # Step 3: Search for similar audio clips using PANN embeddings
         print("Searching for similar audio clips...")
-        similar_clips = search_similar_audio(
+
+        if audio_searcher is None:
+            print("Audio searcher not yet initialized. Initializing now...")
+            ensure_audio_searcher()
+
+        similar_clips = audio_searcher.search_similar_audio(
             audio_path=temp_audio_path,
             top_k=3,
             similarity_threshold=0.3  # Lower threshold to ensure we get results
         )
-        
+
         print(f"Found {len(similar_clips)} similar clips")
-        
+
+        # Encode generated audio
+        generated_audio_payload = None
+        if audio:
+            generated_buffer = io.BytesIO()
+            scipy.io.wavfile.write(generated_buffer, rate=16000, data=audio[0])
+            generated_buffer.seek(0)
+            generated_audio_payload = {
+                "filename": "generated_soundscape.wav",
+                "sample_rate": 16000,
+                "content_base64": base64.b64encode(generated_buffer.read()).decode("utf-8"),
+            }
+
+        # Collect similar clip payloads with audio bytes
+        similar_clip_payloads = []
+        for clip in similar_clips:
+            clip_payload = {
+                "fname": clip.get("fname"),
+                "similarity": clip.get("similarity"),
+                "metadata": clip.get("metadata", {}),
+                "split": clip.get("split"),
+            }
+
+            audio_tuple = None
+            if audio_searcher is not None and clip.get("fname"):
+                try:
+                    audio_tuple = audio_searcher.get_audio_data(clip["fname"])
+                except Exception as retrieval_error:
+                    print(f"Unable to retrieve audio data for {clip.get('fname')}: {retrieval_error}")
+
+            if audio_tuple:
+                audio_array, sample_rate = audio_tuple
+                buffer = io.BytesIO()
+                sf.write(buffer, audio_array, sample_rate, format="WAV")
+                buffer.seek(0)
+                clip_payload.update(
+                    {
+                        "sample_rate": sample_rate,
+                        "content_base64": base64.b64encode(buffer.read()).decode("utf-8"),
+                    }
+                )
+            else:
+                clip_payload.update({"sample_rate": None, "content_base64": None})
+
+            similar_clip_payloads.append(clip_payload)
+
         # Format response
         frame_filenames = [frame.filename for frame in frames]
         response = {
             "frame_filenames": frame_filenames,
             "num_frames": len(frames),
             "audio_description": audio_description,
-            "similar_clips": similar_clips,
-            "total_results": len(similar_clips)
+            "generated_audio": generated_audio_payload,
+            "similar_clips": similar_clip_payloads,
+            "total_results": len(similar_clip_payloads)
         }
         
         return JSONResponse(content=response)
