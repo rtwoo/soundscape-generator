@@ -245,7 +245,7 @@ async def process_frames(frames: List[UploadFile] = File(...)):
         # Collect similar clip payloads with audio bytes
         similar_clip_payloads = []
         for i, clip in enumerate(similar_clips):
-            print(f"Processing similar clip {i+1}/{len(similar_clips)}: {clip.get('fname')}")
+            print(f"Processing similar clip {i+1}/{len(similar_clips)}: {clip.get('fname')} (Score: {clip.get('similarity')})")
             
             clip_payload = {
                 "fname": clip.get("fname"),
