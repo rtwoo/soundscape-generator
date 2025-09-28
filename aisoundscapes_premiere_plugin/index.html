@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="main.js" defer></script>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="panel-scroll">
+      <sp-heading size="L">AI Soundscape Generator</sp-heading>
+
+      <section class="panel-section" id="context-section">
+        <div class="section-header">
+          <sp-heading size="S">Sequence context</sp-heading>
+          <sp-button id="refresh-sequence" variant="secondary" size="s"
+            >Refresh</sp-button
+          >
+        </div>
+        <div class="context-body">
+          <sp-body id="sequence-name" class="prominent">No active sequence</sp-body>
+          <sp-body id="sequence-fps" class="secondary">Frame rate: -- fps</sp-body>
+        </div>
+      </section>
+
+      <sp-divider></sp-divider>
+
+      <section class="panel-section scrollable-panel" id="salient-section">
+        <div class="section-header">
+            <sp-heading size="S">Salient keyframes</sp-heading>
+            <sp-button id="mark-salient" variant="primary"
+                >Mark current playhead</sp-button
+            >
+        </div>
+        <div class="scrollable-panel-content">
+          <div id="salient-list" class="annotation-list empty">
+            <sp-body class="secondary">No keyframes marked yet.</sp-body>
+          </div>
+        </div>
+      </section>
+
+      <sp-divider></sp-divider>
+
+      <section class="panel-section scrollable-panel" id="scene-section">
+        <div class="section-header">
+            <sp-heading size="S">Scenes</sp-heading>
+            <div class="section-actions">
+                <sp-button id="mark-scene-start" variant="secondary">Set start</sp-button>
+                <sp-button id="mark-scene-end" variant="cta">Set end</sp-button>
+            </div>
+        </div>
+        <div class="scrollable-panel-content">
+          <sp-body id="pending-scene" class="secondary"></sp-body>
+          <div id="scene-list" class="annotation-list empty">
+            <sp-body class="secondary">No scenes defined yet.</sp-body>
+          </div>
+        </div>
+      </section>
+
+      <sp-divider></sp-divider>
+
+      <section class="panel-section" id="export-section">
+        <div class="section-header">
+          <sp-heading size="S">Annotations</sp-heading>
+          <div class="section-actions">
+            <sp-button id="copy-annotations" variant="primary" size="s"
+              >Copy JSON</sp-button
+            >
+            <sp-button id="clear-annotations" variant="secondary" size="s"
+              >Clear</sp-button
+            >
+          </div>
+        </div>
+        <sp-body id="status-message" class="secondary"></sp-body>
+      </section>
+    </div>
+  </body>
+</html>

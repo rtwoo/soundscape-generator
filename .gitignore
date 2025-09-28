@@ -3,3 +3,6 @@ __pycache__/
 *.mp4
 models--Qwen--Qwen2.5-VL-7B-Instruct/
 *.swp
+Adobe Premiere Pro (Beta) Auto-Save/
+*.prin
+*.prproj
