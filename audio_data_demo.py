@@ -10,7 +10,7 @@ This shows how to:
 """
 
 import os
-from pann_audio_embedding import AudioSimilaritySearcher, search_similar_audio
+from pann_search import AudioSimilaritySearcher, search_similar_audio
 
 def demo_audio_storage_retrieval():
     """Demo the audio storage and retrieval functionality."""
