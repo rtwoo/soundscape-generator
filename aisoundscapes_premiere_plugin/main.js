@@ -14,9 +14,10 @@
 
 const ppro = require("premierepro");
 const { storage } = require("uxp");
+const fs = require("fs");
 
 // Add version check to help with cache issues
-console.log("Plugin loaded - Version: 2025-09-28-v2");
+console.log("Plugin loaded - Version: 2025-09-28-v3");
 
 const { localFileSystem, formats } = storage;
 
@@ -1579,6 +1580,7 @@ async function generateAudioFromVideoSegments() {
     // Export short video clips for each scene (max 10 seconds each)
     const videoSegments = [];
     const maxSegmentDuration = 10 * TICKS_PER_SECOND; // 10 seconds in ticks
+    let tempFolder = null; // Store temp folder reference for cleanup
 
     for (let sceneIndex = 0; sceneIndex < Math.min(state.scenes.length, 5); sceneIndex++) {
       const scene = state.scenes[sceneIndex];
@@ -1593,17 +1595,21 @@ async function generateAudioFromVideoSegments() {
       const filename = `scene-${sceneIndex + 1}-segment.mp4`;
       const tempFolderName = `video-segments-${Date.now()}`;
       
-      // Create temp folder for video segments
+      // Create temp folder for video segments using UXP storage API
+      let tempFolder;
       let tempFolderPath;
       try {
-        tempFolderPath = `plugin-temp:/${tempFolderName}`;
-        await fs.mkdir(tempFolderPath, { recursive: true });
+        const dataFolder = await localFileSystem.getDataFolder();
+        tempFolder = await dataFolder.createFolder(tempFolderName);
+        tempFolderPath = tempFolder.nativePath || `plugin-data:/${tempFolderName}`;
       } catch (error) {
-        tempFolderPath = `plugin-data:/${tempFolderName}`;
-        await fs.mkdir(tempFolderPath, { recursive: true });
+        console.error("Failed to create temp folder:", error);
+        throw new Error(`Unable to create temporary folder: ${error.message}`);
       }
       
-      const filePath = `${tempFolderPath}/${filename}`;
+      // Create the file entry using storage API
+      const fileEntry = await tempFolder.createFile(filename, { overwrite: true });
+      const filePath = resolveNativePath(fileEntry);
       
       try {
         console.log(`Exporting video segment for scene ${sceneIndex + 1}: ${scene.start.timecode} to ${formatTimecodeFromSeconds(segmentEndTicks / TICKS_PER_SECOND, state.fps)}`);
@@ -1611,8 +1617,8 @@ async function generateAudioFromVideoSegments() {
         // Try EncoderManager first
         await exportVideoSegmentWithEncoderManager(sequence, scene.start.ticks, segmentEndTicks, filePath);
         
-        // Read the exported video file
-        const binary = await fs.readFile(filePath);
+        // Read the exported video file using storage API
+        const binary = await fileEntry.read({ format: formats.binary });
         if (binary && binary.byteLength > 0) {
           const blob = new Blob([binary], { type: 'video/mp4' });
           videoSegments.push({
@@ -1621,6 +1627,7 @@ async function generateAudioFromVideoSegments() {
             filename,
             blob,
             mime: 'video/mp4',
+            fileEntry,  // Store the file entry for cleanup
             startTicks: scene.start.ticks,
             endTicks: segmentEndTicks,
             duration: (segmentEndTicks - scene.start.ticks) / TICKS_PER_SECOND
@@ -1720,9 +1727,20 @@ async function generateAudioFromVideoSegments() {
     cleanup = async () => {
       for (const segment of videoSegments) {
         try {
-          await fs.unlink(segment.filePath);
+          if (segment.fileEntry) {
+            await segment.fileEntry.delete();
+          }
         } catch (error) {
           console.warn("Unable to remove video segment", error);
+        }
+      }
+      
+      // Try to remove the temp folder
+      if (tempFolder) {
+        try {
+          await tempFolder.delete();
+        } catch (error) {
+          console.warn("Unable to remove temp folder", error);
         }
       }
     };
