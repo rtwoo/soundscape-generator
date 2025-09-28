@@ -364,7 +364,7 @@ async function exportVideoSegmentWithEncoderManager(sequence, startTicks, endTic
       }
     }
     
-    throw lastError || new Error("All video export strategies failed");\n    \n  } catch (error) {\n    console.warn(\"EncoderManager video export failed:\", error);\n    throw error;\n  }\n}
+    throw lastError || new Error("All video export strategies failed"); } catch (error) {    console.warn("EncoderManager video export failed:", error);   throw error;  }}
 
 async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 30000) {
   const startTime = Date.now();
