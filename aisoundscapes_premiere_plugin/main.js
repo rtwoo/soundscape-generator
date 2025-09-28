@@ -17,9 +17,41 @@ const { storage } = require("uxp");
 const fs = require("fs");
 
 // Add version check to help with cache issues
-console.log("Plugin loaded - Version: 2025-09-28-v3");
+console.log("Plugin loaded - Version: 2025-09-28-v4");
 
 const { localFileSystem, formats } = storage;
+
+// Debug function to explore available export APIs
+function debugExportAPIs() {
+  console.log("=== DEBUGGING PREMIERE PRO EXPORT APIS ===");
+  console.log("ppro object properties:", Object.getOwnPropertyNames(ppro));
+  
+  if (ppro.EncoderManager) {
+    console.log("ppro.EncoderManager available:", Object.getOwnPropertyNames(ppro.EncoderManager));
+    if (ppro.EncoderManager.ExportType) {
+      console.log("EncoderManager.ExportType:", ppro.EncoderManager.ExportType);
+    }
+    if (ppro.EncoderManager.ExportStatus) {
+      console.log("EncoderManager.ExportStatus:", ppro.EncoderManager.ExportStatus);
+    }
+  } else {
+    console.log("ppro.EncoderManager: NOT AVAILABLE");
+  }
+  
+  if (ppro.Exporter) {
+    console.log("ppro.Exporter available:", Object.getOwnPropertyNames(ppro.Exporter));
+  } else {
+    console.log("ppro.Exporter: NOT AVAILABLE");
+  }
+  
+  if (ppro.MediaEncoder) {
+    console.log("ppro.MediaEncoder available:", Object.getOwnPropertyNames(ppro.MediaEncoder));
+  } else {
+    console.log("ppro.MediaEncoder: NOT AVAILABLE");
+  }
+  
+  console.log("=== END EXPORT API DEBUG ===");
+}
 
 const API_BASE_URL =
   (typeof window !== "undefined" && window.__AISoundscapesApi?.baseUrl) || "http://sunhacks.see250003.projects.jetstream-cloud.org:8000/";
@@ -155,36 +187,86 @@ async function exportFrameWithEncoderManager(sequence, ticks, outputPath, format
   try {
     console.log(`Attempting EncoderManager export at ticks: ${ticks}`);
     
-    // Check if EncoderManager is available
-    if (!ppro.EncoderManager) {
-      throw new Error("EncoderManager not available");
+    // Check if EncoderManager is available - try different possible locations
+    const encoderManager = ppro.EncoderManager || ppro.Exporter || ppro.MediaEncoder;
+    if (!encoderManager) {
+      throw new Error("No encoder/export manager available in ppro object");
     }
     
-    // Create export settings for frame
-    const exportSettings = {
-      exportType: ppro.EncoderManager.ExportType.FRAME,
-      format: format.toUpperCase(),
-      outputPath: outputPath,
-      width: 1920,
-      height: 1080,
-      useMaximumRenderQuality: true,
-      frameRate: await resolveSequenceFps(sequence)
-    };
+    console.log("Available encoder methods:", Object.getOwnPropertyNames(encoderManager));
     
-    // Set the time for frame export
-    const tickTime = ppro.TickTime.createWithTicks(ticks.toString());
-    exportSettings.startTime = tickTime;
-    exportSettings.endTime = tickTime;
+    // Try different EncoderManager API approaches
+    const strategies = [
+      // Strategy 1: Modern EncoderManager API
+      async () => {
+        if (!encoderManager.ExportType || !encoderManager.startExport) {
+          throw new Error("Modern EncoderManager API not available");
+        }
+        
+        const exportSettings = {
+          exportType: encoderManager.ExportType.FRAME || "FRAME",
+          format: format.toUpperCase(),
+          outputPath: outputPath,
+          width: 1920,
+          height: 1080,
+          useMaximumRenderQuality: true
+        };
+        
+        const tickTime = ppro.TickTime.createWithTicks(ticks.toString());
+        exportSettings.startTime = tickTime;
+        exportSettings.endTime = tickTime;
+        
+        const exportJob = await encoderManager.startExport(sequence, exportSettings);
+        if (exportJob) {
+          return await waitForExportCompletion(exportJob, outputPath);
+        }
+        throw new Error("Export job failed to start");
+      },
+      
+      // Strategy 2: Legacy EncoderManager with different parameters
+      async () => {
+        if (typeof encoderManager.exportFrame === "function") {
+          const tickTime = ppro.TickTime.createWithTicks(ticks.toString());
+          return await encoderManager.exportFrame(sequence, tickTime, outputPath, {
+            format: format.toUpperCase(),
+            width: 1920,
+            height: 1080,
+            quality: "HIGH"
+          });
+        }
+        throw new Error("exportFrame method not available");
+      },
+      
+      // Strategy 3: Simple export call
+      async () => {
+        if (typeof encoderManager.export === "function") {
+          return await encoderManager.export(sequence, {
+            type: "frame",
+            time: ticks,
+            output: outputPath,
+            format: format
+          });
+        }
+        throw new Error("export method not available");
+      }
+    ];
     
-    // Start the export
-    const exportJob = await ppro.EncoderManager.startExport(sequence, exportSettings);
-    
-    // Wait for export completion
-    if (exportJob) {
-      return await waitForExportCompletion(exportJob, outputPath);
+    let lastError = null;
+    for (let i = 0; i < strategies.length; i++) {
+      try {
+        console.log(`Trying EncoderManager strategy ${i + 1}`);
+        const result = await strategies[i]();
+        if (result) {
+          console.log(`EncoderManager strategy ${i + 1} succeeded`);
+          return result;
+        }
+      } catch (strategyError) {
+        console.warn(`EncoderManager strategy ${i + 1} failed:`, strategyError);
+        lastError = strategyError;
+      }
     }
     
-    throw new Error("Export job failed to start");
+    throw lastError || new Error("All EncoderManager strategies failed");
     
   } catch (error) {
     console.warn("EncoderManager export failed:", error);
@@ -196,44 +278,93 @@ async function exportVideoSegmentWithEncoderManager(sequence, startTicks, endTic
   try {
     console.log(`Attempting EncoderManager video export from ${startTicks} to ${endTicks}`);
     
-    if (!ppro.EncoderManager) {
-      throw new Error("EncoderManager not available");
+    // Check if EncoderManager is available - try different possible locations
+    const encoderManager = ppro.EncoderManager || ppro.Exporter || ppro.MediaEncoder;
+    if (!encoderManager) {
+      throw new Error("No encoder/export manager available for video export");
     }
     
-    // Create export settings for video segment
-    const exportSettings = {
-      exportType: ppro.EncoderManager.ExportType.VIDEO,
-      format: "MP4",
-      outputPath: outputPath,
-      width: 1920,
-      height: 1080,
-      useMaximumRenderQuality: true,
-      frameRate: await resolveSequenceFps(sequence),
-      videoBitrate: 10000000, // 10 Mbps
-      audioBitrate: 128000    // 128 kbps
-    };
+    console.log("Using encoder manager for video export:", Object.getOwnPropertyNames(encoderManager));
     
-    // Set the time range for video export
-    const startTime = ppro.TickTime.createWithTicks(startTicks.toString());
-    const endTime = ppro.TickTime.createWithTicks(endTicks.toString());
-    exportSettings.startTime = startTime;
-    exportSettings.endTime = endTime;
+    // Try different video export strategies
+    const strategies = [
+      // Strategy 1: Modern EncoderManager video export
+      async () => {
+        if (!encoderManager.ExportType || !encoderManager.startExport) {
+          throw new Error("Modern EncoderManager video API not available");
+        }
+        
+        const exportSettings = {
+          exportType: encoderManager.ExportType.VIDEO || "VIDEO",
+          format: "MP4",
+          outputPath: outputPath,
+          width: 1920,
+          height: 1080,
+          useMaximumRenderQuality: true,
+          frameRate: await resolveSequenceFps(sequence),
+          videoBitrate: 10000000,
+          audioBitrate: 128000
+        };
+        
+        const startTime = ppro.TickTime.createWithTicks(startTicks.toString());
+        const endTime = ppro.TickTime.createWithTicks(endTicks.toString());
+        exportSettings.startTime = startTime;
+        exportSettings.endTime = endTime;
+        
+        const exportJob = await encoderManager.startExport(sequence, exportSettings);
+        if (exportJob) {
+          return await waitForExportCompletion(exportJob, outputPath, 60000); // 1 minute timeout for video
+        }
+        throw new Error("Video export job failed to start");
+      },
+      
+      // Strategy 2: Legacy video export methods
+      async () => {
+        if (typeof encoderManager.exportVideo === "function") {
+          const startTime = ppro.TickTime.createWithTicks(startTicks.toString());
+          const endTime = ppro.TickTime.createWithTicks(endTicks.toString());
+          return await encoderManager.exportVideo(sequence, startTime, endTime, outputPath, {
+            format: "MP4",
+            width: 1920,
+            height: 1080,
+            quality: "HIGH"
+          });
+        }
+        throw new Error("exportVideo method not available");
+      },
+      
+      // Strategy 3: Generic export with video parameters
+      async () => {
+        if (typeof encoderManager.export === "function") {
+          return await encoderManager.export(sequence, {
+            type: "video",
+            startTime: startTicks,
+            endTime: endTicks,
+            output: outputPath,
+            format: "mp4",
+            preset: "high_quality"
+          });
+        }
+        throw new Error("export method not available for video");
+      }
+    ];
     
-    // Start the export
-    const exportJob = await ppro.EncoderManager.startExport(sequence, exportSettings);
-    
-    // Wait for export completion
-    if (exportJob) {
-      return await waitForExportCompletion(exportJob, outputPath);
+    let lastError = null;
+    for (let i = 0; i < strategies.length; i++) {
+      try {
+        console.log(`Trying video export strategy ${i + 1}`);
+        const result = await strategies[i]();
+        if (result) {
+          console.log(`Video export strategy ${i + 1} succeeded`);
+          return result;
+        }
+      } catch (strategyError) {
+        console.warn(`Video export strategy ${i + 1} failed:`, strategyError);
+        lastError = strategyError;
+      }
     }
     
-    throw new Error("Video export job failed to start");
-    
-  } catch (error) {
-    console.warn("EncoderManager video export failed:", error);
-    throw error;
-  }
-}
+    throw lastError || new Error("All video export strategies failed");\n    \n  } catch (error) {\n    console.warn(\"EncoderManager video export failed:\", error);\n    throw error;\n  }\n}
 
 async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 30000) {
   const startTime = Date.now();
@@ -241,14 +372,50 @@ async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 3000
   return new Promise((resolve, reject) => {
     const checkInterval = setInterval(async () => {
       try {
-        const status = await exportJob.getStatus();
+        let status;
         
-        if (status === ppro.EncoderManager.ExportStatus.COMPLETED) {
+        // Try different ways to get status
+        if (typeof exportJob.getStatus === "function") {
+          status = await exportJob.getStatus();
+        } else if (typeof exportJob.status !== "undefined") {
+          status = exportJob.status;
+        } else if (typeof exportJob.isComplete === "function") {
+          const isComplete = await exportJob.isComplete();
+          status = isComplete ? "COMPLETED" : "IN_PROGRESS";
+        } else {
+          // Fallback: just check if file exists after some time
+          if (Date.now() - startTime > 5000) { // Wait at least 5 seconds
+            try {
+              const stats = await fs.lstat(expectedPath);
+              if (stats.size > 0) {
+                clearInterval(checkInterval);
+                resolve(true);
+                return;
+              }
+            } catch (fileError) {
+              // File doesn't exist yet, continue waiting
+            }
+          }
+          
+          if (Date.now() - startTime > timeoutMs) {
+            clearInterval(checkInterval);
+            reject(new Error("Export timeout - no status method available"));
+            return;
+          }
+          
+          return; // Continue waiting
+        }
+        
+        // Handle status responses
+        const completedStatuses = ["COMPLETED", "SUCCESS", "DONE", true];
+        const failedStatuses = ["FAILED", "ERROR", "CANCELLED", false];
+        
+        if (completedStatuses.includes(status) || 
+            (typeof status === "object" && status.completed)) {
           clearInterval(checkInterval);
           
           // Verify the file exists
           try {
-            const fs = require('fs');
             const stats = await fs.lstat(expectedPath);
             if (stats.size > 0) {
               resolve(true);
@@ -259,10 +426,11 @@ async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 3000
             reject(new Error(`Export completed but file not found: ${fileError.message}`));
           }
           
-        } else if (status === ppro.EncoderManager.ExportStatus.FAILED || 
-                   status === ppro.EncoderManager.ExportStatus.CANCELLED) {
+        } else if (failedStatuses.includes(status) || 
+                   (typeof status === "object" && status.failed)) {
           clearInterval(checkInterval);
-          reject(new Error(`Export ${status.toLowerCase()}`));
+          const errorMsg = (typeof status === "object" && status.error) ? status.error : status;
+          reject(new Error(`Export failed: ${errorMsg}`));
           
         } else if (Date.now() - startTime > timeoutMs) {
           clearInterval(checkInterval);
@@ -270,6 +438,7 @@ async function waitForExportCompletion(exportJob, expectedPath, timeoutMs = 3000
         }
         
         // Status is still in progress, continue waiting
+        console.log(`Export status: ${JSON.stringify(status)}`);
         
       } catch (statusError) {
         clearInterval(checkInterval);
@@ -383,20 +552,20 @@ async function exportFramesForMoments(sequence, moments) {
       }
       
       const exportStrategies = [
-        // Strategy 1: Use EncoderManager for frame export
+        // Strategy 1: Try ppro.Exporter first (most reliable)
         async () => {
-          console.log(`Strategy 1: Using EncoderManager for frame export`);
+          console.log(`Strategy 1: Using ppro.Exporter.exportSequenceFrame`);
           
-          try {
-            const success = await exportFrameWithEncoderManager(sequence, moment.ticks, filePath, selectedFormat.format);
-            if (success) {
-              console.log(`EncoderManager frame export succeeded: ${filePath}`);
+          if (ppro.Exporter && typeof ppro.Exporter.exportSequenceFrame === 'function') {
+            const tickTime = ppro.TickTime.createWithTicks(moment.ticks.toString());
+            const result = ppro.Exporter.exportSequenceFrame(sequence, tickTime, filePath, selectedFormat.format, 1920, 1080);
+            
+            if (result) {
+              console.log(`ppro.Exporter frame export succeeded: ${filePath}`);
               return true;
             }
-          } catch (encoderError) {
-            console.warn(`EncoderManager export failed: ${encoderError.message}`);
-            throw encoderError;
           }
+          throw new Error("ppro.Exporter.exportSequenceFrame not available or failed");
         },
         
         // Strategy 2: Use traditional ppro.Exporter
@@ -414,33 +583,82 @@ async function exportFramesForMoments(sequence, moments) {
           throw new Error("ppro.Exporter.exportSequenceFrame not available or failed");
         },
         
-        // Strategy 3: Create functional placeholder image with frame info
+        // Strategy 3: Prompt user to select screenshot files
         async () => {
-          console.log(`Strategy 3: Creating placeholder image with frame information`);
+          console.log(`Strategy 3: Prompting user for screenshot file selection`);
           
-          // Create a more substantial placeholder JPEG (100x100 pixels)
-          // This is a valid JPEG with a gray background
-          const placeholderJpeg = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/wA=';
-          
-          // Create a slightly larger, more visible placeholder
-          const placeholderData = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAAoACgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9/KKKKAP/2Q==';
-          
-          // Convert base64 to binary
-          const base64Data = placeholderData.split(',')[1];
-          const binaryString = atob(base64Data);
-          const buffer = new ArrayBuffer(binaryString.length);
-          const view = new Uint8Array(buffer);
-          
-          for (let i = 0; i < binaryString.length; i++) {
-            view[i] = binaryString.charCodeAt(i);
+          try {
+            // Move playhead to the moment first so user can see the frame
+            await movePlayheadToTicks(moment.ticks);
+            
+            // Show user-friendly dialog
+            const shouldProceed = confirm(
+              `Frame export failed for ${moment.timecode}.\n\n` +
+              `The playhead has been moved to this moment. Please:\n` +
+              `1. Take a screenshot of the Program Monitor\n` +
+              `2. Click OK to select the screenshot file\n` +
+              `3. Or click Cancel to skip this frame`
+            );
+            
+            if (!shouldProceed) {
+              throw new Error("User cancelled screenshot selection");
+            }
+            
+            // Prompt user to select the screenshot file
+            const selectedFiles = await localFileSystem.getFileForOpening({
+              allowMultiple: false,
+              types: [
+                {
+                  name: "Image Files",
+                  extensions: ["jpg", "jpeg", "png", "bmp", "tif", "tiff"]
+                }
+              ]
+            });
+            
+            if (!selectedFiles || selectedFiles.length === 0) {
+              throw new Error("No screenshot file selected");
+            }
+            
+            const screenshotFile = selectedFiles[0];
+            console.log(`User selected screenshot: ${screenshotFile.name}`);
+            
+            // Read the selected file
+            const screenshotData = await screenshotFile.read({ format: formats.binary });
+            
+            if (!screenshotData || screenshotData.byteLength === 0) {
+              throw new Error("Selected screenshot file is empty");
+            }
+            
+            // Write to our target file
+            await fs.writeFile(filePath, screenshotData);
+            
+            console.log(`Successfully saved user screenshot: ${filePath} (${screenshotData.byteLength} bytes)`);
+            console.log(`Screenshot represents frame at ${moment.timecode} (${moment.ticks} ticks)`);
+            
+            return true;
+            
+          } catch (dialogError) {
+            console.warn(`Screenshot selection failed: ${dialogError.message}`);
+            
+            // Fallback to placeholder if user cancels or other error
+            console.log("Falling back to placeholder image");
+            
+            const placeholderData = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAAoACgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9/KKKKAP/2Q==';
+            
+            const base64Data = placeholderData.split(',')[1];
+            const binaryString = atob(base64Data);
+            const buffer = new ArrayBuffer(binaryString.length);
+            const view = new Uint8Array(buffer);
+            
+            for (let i = 0; i < binaryString.length; i++) {
+              view[i] = binaryString.charCodeAt(i);
+            }
+            
+            await fs.writeFile(filePath, buffer);
+            console.log(`Created placeholder image as fallback: ${filePath}`);
+            
+            return true;
           }
-          
-          // Write to file
-          await fs.writeFile(filePath, buffer);
-          console.log(`Created placeholder image file: ${filePath} (${buffer.byteLength} bytes)`);
-          console.log(`Placeholder represents frame at ${moment.timecode} (${moment.ticks} ticks)`);
-          
-          return true; // Indicate success
         },
         
         // Strategy 2: Use storage API file creation (if available)
@@ -2010,6 +2228,9 @@ function registerEventListeners() {
 }
 
 function init() {
+  // Debug available export APIs on startup
+  debugExportAPIs();
+  
   registerEventListeners();
   render();
   refreshSequence();
